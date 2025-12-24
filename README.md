@@ -1,9 +1,9 @@
 # Bayesian Optimization & SafeOpt Implementation
 
-**Course Project: Algorithms for Optimization**  
+**Course Project: Algorithms for Optimization (2nd Edition)**  
 **Chapter 19: Surrogate Optimization**
 
-Implementation of surrogate-based optimization algorithms from Chapter 19 of *Algorithms for Optimization* (Kochenderfer & Wheeler, 2019).
+Implementation of surrogate-based optimization algorithms from Chapter 19 of *Algorithms for Optimization, 2nd Edition* (Kochenderfer & Wheeler, 2025).
 
 ---
 
@@ -19,237 +19,411 @@ Implementation of surrogate-based optimization algorithms from Chapter 19 of *Al
 
 ---
 
-## Core Implementations
-
-### 1. **Gaussian Process** (`src/core/gaussian_process.py`)
-- RBF (Squared Exponential) kernel implementation
-- Efficient prediction via Cholesky decomposition
-- Returns mean and uncertainty estimates
-
-```python
-from src.core import GaussianProcess
-
-gp = GaussianProcess(length_scale=0.5, noise=1e-6)
-gp.fit(X_train, y_train)
-mean, std = gp.predict(X_test)
-```
-
-### 2. **Acquisition Functions** (`src/core/acquisition.py`)
-Implementation of all major acquisition strategies:
-
-| Function | Description | Use Case |
-|----------|-------------|----------|
-| **Expected Improvement (EI)** | Maximizes expected gain over current best | General-purpose, balanced exploration-exploitation |
-| **Probability of Improvement (PI)** | Maximizes probability of finding better point | Fast convergence, greedy optimization |
-| **Lower Confidence Bound (LCB)** | Minimizes lower confidence bound | Adjustable exploration via α parameter |
-| **Prediction-Based (PBE)** | Pure exploitation - minimizes predicted mean | Quick descent when near optimum |
-| **Error-Based (EBE)** | Pure exploration - maximizes uncertainty | Uncertainty reduction, exploration phase |
-
-### 3. **Bayesian Optimizer** (`src/core/optimizer.py`)
-Standard Bayesian Optimization framework:
-
-```python
-from src.core import BayesianOptimizer
-from src.benchmarks import get_benchmark
-
-benchmark = get_benchmark('ackley', dim=2)
-optimizer = BayesianOptimizer(
-    objective_func=benchmark,
-    bounds=benchmark.bounds,
-    acquisition='ei',
-    gp_params={'length_scale': 0.5, 'noise': 1e-6}
-)
-
-X_best, y_best, history = optimizer.optimize(
-    n_init=5,      # Random initialization points
-    n_iter=30,     # Optimization iterations
-    random_state=42
-)
-```
-
-### 4. **SafeOpt Algorithm** (`src/core/optimizer.py`)
-Safe Bayesian Optimization with safety constraints (Section 19.6):
-
-```python
-from src.core import GaussianProcess, SafeOptimizer
-
-# Initialize with known safe points
-X_init = np.array([[0.3, 0.0], [0.0, 0.3]])
-y_init = np.array([benchmark(x) for x in X_init])
-
-gp = GaussianProcess(length_scale=0.5, noise=1e-6)
-safe_opt = SafeOptimizer(
-    gp=gp,
-    bounds=benchmark.bounds.tolist(),
-    y_threshold=-0.2,  # Safety constraint: f(x) ≥ threshold
-    beta=10.0,         # Confidence parameter
-    p_safe=0.95        # Required safety probability
-)
-
-X_best, y_best, history = safe_opt.optimize(
-    objective_func=benchmark,
-    X_init=X_init,
-    y_init=y_init,
-    n_iter=40
-)
-
-print(f"Safety violations: {history['violations']}/{40}")
-```
-
----
-
-## Benchmark Functions
-
-**Univariate Functions:**
-- **Forrester**: Smooth 1D function
-- **Gramacy & Lee**: Discontinuous 1D function
-
-**Multivariate Functions:**
-- **Ackley**: Multimodal with many local minima
-- **Rosenbrock**: Narrow valley, difficult to optimize
-- **Rastrigin**: Highly multimodal with regular structure
-
-**Safe Optimization:**
-- **Flower**: Petal-like safe/unsafe regions for testing SafeOpt
-
----
-
 ## Project Structure
 
 ```
 prj3/
 ├── src/
-│   ├── core/                      # Core optimization components
-│   │   ├── gaussian_process.py    # GP with RBF kernel
-│   │   ├── acquisition.py         # All acquisition functions
-│   │   └── optimizer.py           # BayesianOptimizer & SafeOptimizer
-│   ├── benchmarks/                # Benchmark test functions
-│   │   └── functions.py
-│   └── utils/                     # Visualization configs
-│       └── config.py
-├── experiments/                   # Experimental runners
-│   ├── run_benchmarks.py          # Compare acquisition functions
-│   └── run_safe_optimization.py   # SafeOpt experiments
-├── tests/                         # Comprehensive test suite
+│   ├── core/
+│   │   ├── gaussian_process.py    # GP regression with RBF kernel
+│   │   ├── acquisition.py         # All acquisition functions (EI, PI, LCB, etc.)
+│   │   └── optimizer.py           # BayesianOptimizer & SafeOptimizer classes
+│   ├── benchmarks/
+│   │   └── functions.py           # Test functions (Forrester, Ackley, Flower, etc.)
+│   └── utils/
+│       └── config.py              # Visualization settings
+├── tests/
 │   ├── test_gp.py
 │   ├── test_acquisition.py
 │   ├── test_optimizer.py
 │   ├── test_benchmarks.py
 │   └── run_all_tests.py
+├── run_benchmarks.py              # Main experiment: compare acquisitions
+├── run_safe_optimization.py       # SafeOpt experiment
 ├── README.md
 └── requirements.txt
 ```
 
 ---
 
+## Core Implementations
+
+### 1. Gaussian Process (`src/core/gaussian_process.py`)
+
+**Squared Exponential (RBF) Kernel:**
+
+```python
+K(x, x') = exp(-||x - x'||^2 / (2 * length_scale^2))
+```
+
+**Implementation approach:**
+- Use `scipy.spatial.distance.cdist` for efficient distance computation
+- Cholesky decomposition for numerical stability: `K = L·L^T`
+- Predictions via `cho_solve` instead of matrix inversion
+
+**Key methods:**
+```python
+def fit(self, X, y):
+    # Build kernel matrix K
+    K = self.squared_exponential_kernel(X, X)
+    K += self.noise * I  # Add noise to diagonal
+    self.L = cholesky(K)  # Cholesky factorization
+
+def predict(self, X_test):
+    K_s = self.squared_exponential_kernel(X_train, X_test)
+    alpha = cho_solve((L, True), y_train)
+    mean = K_s^T · alpha
+    
+    # Variance: var = K(x*,x*) - K(x*,X)^T · K^(-1) · K(x*,X)
+    v = cho_solve((L, True), K_s)
+    var = diag(K_ss) - sum(K_s * v, axis=0)
+    std = sqrt(max(var, 0))
+    
+    return mean, std
+```
+
+---
+
+### 2. Acquisition Functions (`src/core/acquisition.py`)
+
+Each acquisition function balances **exploration** (sampling uncertain regions) vs **exploitation** (sampling near predicted optimum).
+
+#### **2.1 Probability of Improvement (PI)** - Algorithm 19.1
+
+**Concept:** Maximize probability that new sample will be better than current best.
+
+**Mathematical formulation:**
+```
+P(f(x) < y_min) = Φ((y_min - μ(x)) / σ(x))
+```
+where Φ is the standard normal CDF.
+
+**Implementation:**
+```python
+def probability_of_improvement(mean, std, y_best, xi=0.01):
+    """
+    Args:
+        mean: GP predicted mean at candidate points
+        std: GP predicted standard deviation
+        y_best: Current best observed value (for minimization)
+        xi: Exploration parameter (small positive value)
+    
+    Returns:
+        PI values (higher = more likely to improve)
+    """
+    with np.errstate(divide='warn'):
+        z = (y_best - xi - mean) / std
+        pi = norm.cdf(z)  # Standard normal CDF
+    
+    # Handle zero variance (already sampled points)
+    pi[std == 0.0] = 0.0
+    return pi
+```
+
+**Key insight:** PI only cares about *whether* we improve, not *how much*.
+
+---
+
+#### **2.2 Expected Improvement (EI)** - Algorithm 19.2
+
+**Concept:** Maximize expected amount of improvement over current best.
+
+**Mathematical formulation:**
+```
+EI(x) = E[max(y_min - f(x), 0)]
+      = (y_min - μ(x)) · Φ(z) + σ(x) · φ(z)
+```
+where z = (y_min - μ(x)) / σ(x), φ is standard normal PDF.
+
+**Implementation:**
+```python
+def expected_improvement(mean, std, y_best, xi=0.01):
+    """
+    Computes expected improvement using closed-form solution.
+    
+    Derivation:
+    - Improvement I(y) = max(y_min - y, 0)
+    - Under GP, y ~ N(μ, σ²)
+    - Integrate I(y) over this distribution
+    - Results in closed form above
+    """
+    with np.errstate(divide='warn'):
+        z = (y_best - xi - mean) / std
+        ei = (y_best - xi - mean) * norm.cdf(z) + std * norm.pdf(z)
+    
+    ei[std == 0.0] = 0.0
+    return ei
+```
+
+**Key insight:** EI balances probability of improvement AND magnitude of improvement.
+
+---
+
+#### **2.3 Lower Confidence Bound (LCB)** - Section 19.3
+
+**Concept:** Trade off between predicted mean (exploitation) and uncertainty (exploration) via tunable parameter α.
+
+**Mathematical formulation:**
+```
+LCB(x) = μ(x) - α·σ(x)
+```
+
+**Implementation:**
+```python
+def lower_confidence_bound(mean, std, alpha=2.0):
+    """
+    Args:
+        alpha: Exploration-exploitation trade-off
+               - α = 0: pure exploitation (minimize mean)
+               - α → ∞: pure exploration (maximize uncertainty)
+               - α = 2.0: common default (≈95% confidence interval)
+    
+    Returns:
+        LCB values (lower = better for minimization)
+    """
+    return mean - alpha * std
+```
+
+**Selecting next point:** `x_next = argmin LCB(x)` (minimize the lower bound)
+
+**Key insight:** 
+- Small α: greedy, focuses on best predicted regions
+- Large α: explores uncertain regions even if predicted value is poor
+
+---
+
+#### **2.4 Prediction-Based Exploration (PBE)** - Section 19.1
+
+**Concept:** Pure exploitation - select point with best predicted mean.
+
+**Mathematical formulation:**
+```
+x_next = argmin μ(x)
+```
+
+**Implementation:**
+```python
+def prediction_based(mean, std, y_best=None):
+    """
+    Simplest approach: trust the GP mean completely.
+    Ignores uncertainty (std) and current best (y_best).
+    
+    Pros: Fast convergence when near optimum
+    Cons: Can get stuck re-sampling same region
+    """
+    return mean  # Return as-is for minimization
+```
+
+**Key insight:** No exploration - can waste evaluations sampling near existing points.
+
+---
+
+#### **2.5 Error-Based Exploration (EBE)** - Section 19.2
+
+**Concept:** Pure exploration - sample where uncertainty is highest.
+
+**Mathematical formulation:**
+```
+x_next = argmax σ(x)
+```
+
+**Implementation:**
+```python
+def error_based(mean, std, y_best=None):
+    """
+    Opposite of PBE: ignore predicted values, only reduce uncertainty.
+    
+    Pros: Builds accurate global model
+    Cons: Wastes evaluations in regions far from optimum
+    """
+    return std  # Higher std = more exploration
+```
+
+**Key insight:** Good for learning function shape, poor for optimization.
+
+---
+
+#### **Upper Confidence Bound (UCB)** - For SafeOpt
+
+**Concept:** Used in SafeOpt for maximization/safety analysis.
+
+**Mathematical formulation:**
+```
+UCB(x) = μ(x) + α·σ(x)
+```
+
+**Implementation:**
+```python
+def upper_confidence_bound(mean, std, alpha=2.0):
+    """
+    Optimistic estimate - used in SafeOpt to:
+    1. Identify safe regions (where UCB might exceed threshold)
+    2. Find potential maximizers (where UCB is highest)
+    """
+    return mean + alpha * std
+```
+
+---
+
+### 3. Bayesian Optimizer (`src/core/optimizer.py`)
+
+**Main optimization loop:**
+
+```python
+class BayesianOptimizer:
+    def optimize(self, n_init=5, n_iter=20):
+        # 1. Random initialization
+        X_samples = random_uniform(bounds, n_init)
+        y_samples = [f(x) for x in X_samples]
+        
+        # 2. Iterative optimization
+        for i in range(n_iter):
+            # Fit GP to current data
+            gp.fit(X_samples, y_samples)
+            
+            # Find next point by optimizing acquisition
+            x_next = argmax acquisition(gp.predict(X))
+            y_next = f(x_next)
+            
+            # Add to dataset
+            X_samples.append(x_next)
+            y_samples.append(y_next)
+        
+        # 3. Return best observed point
+        best_idx = argmin(y_samples)
+        return X_samples[best_idx], y_samples[best_idx]
+```
+
+**Acquisition optimization approach:**
+```python
+def _optimize_acquisition(self):
+    # 1. Generate many random candidates
+    X_random = uniform(0, 1, size=(1000 * dim, dim))
+    
+    # 2. Evaluate acquisition at all candidates
+    acq_values = acquisition_function(X_random)
+    
+    # 3. Take top-N candidates
+    top_candidates = X_random[argsort(acq_values)[-25:]]
+    
+    # 4. Local optimization from each
+    for x0 in top_candidates:
+        x_opt = minimize(neg_acquisition, x0, method='L-BFGS-B')
+        # Track best found
+    
+    return best_x
+```
+
+---
+
+### 4. SafeOpt Algorithm (`src/core/optimizer.py`) - Section 19.6
+
+**Problem:** Minimize `f(x)` while ensuring `f(x) ≥ y_threshold` (safety constraint).
+
+**SafeOpt Strategy:**
+
+1. **Safe Set S:** Points where lower confidence bound exceeds threshold
+   ```
+   S = {x : LCB(x) = μ(x) - √β·σ(x) ≥ y_threshold}
+   ```
+
+2. **Potential Minimizers M:** Safe points that might contain optimum
+   ```
+   M = {x ∈ S : LCB(x) ≤ min_{x'∈S} UCB(x')}
+   ```
+
+3. **Potential Expanders E:** Safe points that might expand safe region
+   ```
+   E = {x ∈ S : might lead to larger S if sampled at LCB(x)}
+   ```
+
+**Selection rule:**
+```
+x_next = argmax_{x ∈ M ∪ E} [UCB(x) - LCB(x)]
+```
+(Select point with highest uncertainty among minimizers and expanders)
+
+**Implementation:**
+```python
+class SafeOptimizer:
+    def select_next_point(self, n_candidates=1000):
+        # Generate candidates
+        X = random_uniform(bounds, n_candidates)
+        
+        # Compute confidence bounds
+        u, l = self._confidence_bounds(X)  # UCB, LCB
+        
+        # Identify safe points (LCB above threshold)
+        safe_mask = (l >= self.y_threshold)
+        
+        if not any(safe_mask):
+            return X[argmax(l)]  # No safe points: pick safest
+        
+        # Among safe points: pick highest UCB (optimistic)
+        safe_u = u.copy()
+        safe_u[~safe_mask] = -inf
+        return X[argmax(safe_u)]
+    
+    def _confidence_bounds(self, X):
+        mean, std = self.gp.predict(X)
+        u = mean + sqrt(self.beta) * std
+        l = mean - sqrt(self.beta) * std
+        return u, l
+```
+
+**Safety probability check:**
+```python
+def _compute_safe_set(self, X):
+    mean, std = self.gp.predict(X)
+    
+    # Probability that f(x) ≥ threshold
+    z = (self.y_threshold - mean) / std
+    p_safe = norm.cdf(z)  # P(f(x) < threshold)
+    p_safe = 1 - p_safe    # P(f(x) ≥ threshold)
+    
+    return p_safe >= self.p_safe  # e.g., 0.95
+```
+
+---
+
+## Benchmark Functions
+
+**Univariate (1D):**
+- **Forrester:** `f(x) = (6x-2)^2 x sin(12x-4)` - Smooth, single global minimum
+- **Gramacy & Lee:** `f(x) = sin(10πx)/(2x) + (x-1)^4` - Discontinuous
+
+**Multivariate (2D+):**
+- **Ackley:** Many local minima, single global minimum at origin
+- **Rosenbrock:** Narrow curved valley, global minimum at (1,1,...,1)
+- **Rastrigin:** Highly multimodal with regular grid of local minima
+
+**Safe Optimization:**
+- **Flower:** `f(x₁,x₂) = r^3 x cos(4θ)` - Petal-like safe/unsafe regions
+
+---
+
 ## How to Run
 
 ### Installation
-
 ```bash
 pip install -r requirements.txt
 ```
 
-**Dependencies:** `numpy`, `scipy`, `matplotlib`
-
-### 1. Run Test Suite
-
-Verify all implementations work correctly:
-
+### 1. Run Tests
 ```bash
 cd tests
 python run_all_tests.py
 ```
 
-Tests cover:
-- Gaussian Process predictions
-- Acquisition function computations
-- Optimizer convergence
-- Benchmark function evaluations
-
-### 2. Run Benchmark Experiments
-
-Compare all acquisition functions across all benchmarks:
-
+### 2. Compare Acquisition Functions
 ```bash
-cd experiments
 python run_benchmarks.py
 ```
 
-**Configuration:**
-- 5 benchmarks (Forrester, Gramacy & Lee, Ackley, Rosenbrock, Rastrigin)
-- 5 acquisition functions (PBE, EBE, EI, PI, LCB)
-- 10 independent runs per experiment
-- 30 iterations each, 5 initialization points
-
-**Output:** Results saved to `output_benchmarks/results_TIMESTAMP.json`
-
-### 3. Run SafeOpt Experiments
-
-Test safe exploration on Flower function:
-
+### 3. Run SafeOpt Experiment
 ```bash
-cd experiments
 python run_safe_optimization.py
 ```
-
-**Configuration:**
-- Safety threshold: `y ≥ -0.2`
-- Confidence parameter: `β = 10.0`
-- 10 independent runs
-- 40 iterations each
-
-**Output:** Results saved to `output_safe/results_safe_TIMESTAMP.json`
-
----
-
-## Key Results
-
-### Benchmark Performance (Mean ± Std over 10 runs)
-
-**Univariate Functions:**
-- **Best performer**: PI (fastest convergence, lowest variance)
-- PI converges 15-20% faster than EI on smooth functions
-
-**Multivariate Functions:**
-- **Best performer**: EI (most robust across problem types)
-- EI achieves 0.95-0.98 correlation with global optimum
-
-### SafeOpt Analysis
-
-**Flower Function (β=10.0, threshold=-0.2):**
-- Performance: `0.9995 ± 0.0007`
-- Violation rate: `9.5%` (38/400 total samples)
-- Successfully explores safe regions while avoiding unsafe areas
-
-**Key Insight:** Higher β increases safety but slows convergence. β=10.0 provides good balance.
-
----
-
-## Implementation Highlights
-
-### Technical Features
-
-✅ **Numerically Stable**: Cholesky decomposition for GP, proper handling of zero variance  
-✅ **Vectorized Operations**: Efficient NumPy operations throughout  
-✅ **Edge Case Handling**: Zero std in acquisition functions, array shape mismatches  
-✅ **Comprehensive Testing**: 20+ unit tests covering all components  
-✅ **Clean Code**: Professional structure, no AI patterns, well-documented
-
-### Algorithm Fidelity
-
-All implementations follow the textbook algorithms:
-- **Algorithm 19.1**: `probability_of_improvement()`
-- **Algorithm 19.2**: `expected_improvement()`
-- **Algorithm 19.3-19.6**: Complete SafeOpt implementation
-
----
-
-## References
-
-1. M. J. Kochenderfer and T. A. Wheeler, *Algorithms for Optimization*, MIT Press, 2019.
-2. Y. Sui, A. Gotovos, J. Burdick, and A. Krause, "Safe Exploration for Optimization with Gaussian Processes," ICML 2015.
-3. C. E. Rasmussen and C. K. I. Williams, *Gaussian Processes for Machine Learning*, MIT Press, 2006.
 
 ---
 
