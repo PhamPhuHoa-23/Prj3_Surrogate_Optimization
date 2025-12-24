@@ -94,7 +94,7 @@ Each acquisition function balances **exploration** (sampling uncertain regions) 
 
 **Mathematical formulation:**
 ```
-P(f(x) < y_min) = Φ((y_min - μ(x)) / σ(x))
+P(f(x) < y_min) = $$\Phi$$((y_min - $$\mu$$(x)) / $$\sigma$$(x))
 ```
 where Φ is the standard normal CDF.
 
