@@ -52,13 +52,13 @@ prj3/
 
 **Squared Exponential (RBF) Kernel:**
 
-```python
-K(x, x') = exp(-||x - x'||^2 / (2 * length_scale^2))
-```
+$$K(x, x') = \exp\left(-\frac{\|x - x'\|^2}{2 \ell^2}\right)$$
+
+where $\ell$ is the length scale parameter.
 
 **Implementation approach:**
 - Use `scipy.spatial.distance.cdist` for efficient distance computation
-- Cholesky decomposition for numerical stability: `K = L·L^T`
+- Cholesky decomposition for numerical stability: $K = LL^T$
 - Predictions via `cho_solve` instead of matrix inversion
 
 **Key methods:**
@@ -93,10 +93,10 @@ Each acquisition function balances **exploration** (sampling uncertain regions) 
 **Concept:** Maximize probability that new sample will be better than current best.
 
 **Mathematical formulation:**
-```
-P(f(x) < y_min) = $$\Phi$$((y_min - $$\mu$$(x)) / $$\sigma$$(x))
-```
-where Φ is the standard normal CDF.
+
+$$P(f(x) < y_{\text{min}}) = \Phi\left(\frac{y_{\text{min}} - \mu(x)}{\sigma(x)}\right)$$
+
+where $\Phi$ is the standard normal CDF.
 
 **Implementation:**
 ```python
@@ -129,11 +129,12 @@ def probability_of_improvement(mean, std, y_best, xi=0.01):
 **Concept:** Maximize expected amount of improvement over current best.
 
 **Mathematical formulation:**
-```
-EI(x) = E[max(y_min - f(x), 0)]
-      = (y_min - μ(x)) · Φ(z) + σ(x) · φ(z)
-```
-where z = (y_min - μ(x)) / σ(x), φ is standard normal PDF.
+
+$$\text{EI}(x) = \mathbb{E}[\max(y_{\text{min}} - f(x), 0)]$$
+
+$$= (y_{\text{min}} - \mu(x)) \cdot \Phi(z) + \sigma(x) \cdot \phi(z)$$
+
+where $z = \frac{y_{\text{min}} - \mu(x)}{\sigma(x)}$, and $\phi$ is the standard normal PDF.
 
 **Implementation:**
 ```python
@@ -161,12 +162,11 @@ def expected_improvement(mean, std, y_best, xi=0.01):
 
 #### **2.3 Lower Confidence Bound (LCB)** - Section 19.3
 
-**Concept:** Trade off between predicted mean (exploitation) and uncertainty (exploration) via tunable parameter α.
+**Concept:** Trade off between predicted mean (exploitation) and uncertainty (exploration) via tunable parameter $\alpha$.
 
 **Mathematical formulation:**
-```
-LCB(x) = μ(x) - α·σ(x)
-```
+
+$$\text{LCB}(x) = \mu(x) - \alpha \cdot \sigma(x)$$
 
 **Implementation:**
 ```python
@@ -184,11 +184,11 @@ def lower_confidence_bound(mean, std, alpha=2.0):
     return mean - alpha * std
 ```
 
-**Selecting next point:** `x_next = argmin LCB(x)` (minimize the lower bound)
+**Selecting next point:** $x_{\text{next}} = \arg\min \text{LCB}(x)$ (minimize the lower bound)
 
 **Key insight:** 
-- Small α: greedy, focuses on best predicted regions
-- Large α: explores uncertain regions even if predicted value is poor
+- Small $\alpha$: greedy, focuses on best predicted regions
+- Large $\alpha$: explores uncertain regions even if predicted value is poor
 
 ---
 
@@ -197,9 +197,8 @@ def lower_confidence_bound(mean, std, alpha=2.0):
 **Concept:** Pure exploitation - select point with best predicted mean.
 
 **Mathematical formulation:**
-```
-x_next = argmin μ(x)
-```
+
+$$x_{\text{next}} = \arg\min \mu(x)$$
 
 **Implementation:**
 ```python
@@ -223,9 +222,8 @@ def prediction_based(mean, std, y_best=None):
 **Concept:** Pure exploration - sample where uncertainty is highest.
 
 **Mathematical formulation:**
-```
-x_next = argmax σ(x)
-```
+
+$$x_{\text{next}} = \arg\max \sigma(x)$$
 
 **Implementation:**
 ```python
@@ -248,9 +246,8 @@ def error_based(mean, std, y_best=None):
 **Concept:** Used in SafeOpt for maximization/safety analysis.
 
 **Mathematical formulation:**
-```
-UCB(x) = μ(x) + α·σ(x)
-```
+
+$$\text{UCB}(x) = \mu(x) + \alpha \cdot \sigma(x)$$
 
 **Implementation:**
 ```python
@@ -318,29 +315,26 @@ def _optimize_acquisition(self):
 
 ### 4. SafeOpt Algorithm (`src/core/optimizer.py`) - Section 19.6
 
-**Problem:** Minimize `f(x)` while ensuring `f(x) ≥ y_threshold` (safety constraint).
+**Problem:** Minimize $f(x)$ while ensuring $f(x) \geq y_{\text{threshold}}$ (safety constraint).
 
 **SafeOpt Strategy:**
 
-1. **Safe Set S:** Points where lower confidence bound exceeds threshold
-   ```
-   S = {x : LCB(x) = μ(x) - √β·σ(x) ≥ y_threshold}
-   ```
+1. **Safe Set $S$:** Points where lower confidence bound exceeds threshold
+   
+   $$S = \{x : \text{LCB}(x) = \mu(x) - \sqrt{\beta} \cdot \sigma(x) \geq y_{\text{threshold}}\}$$
 
-2. **Potential Minimizers M:** Safe points that might contain optimum
-   ```
-   M = {x ∈ S : LCB(x) ≤ min_{x'∈S} UCB(x')}
-   ```
+2. **Potential Minimizers $M$:** Safe points that might contain optimum
+   
+   $$M = \{x \in S : \text{LCB}(x) \leq \min_{x' \in S} \text{UCB}(x')\}$$
 
-3. **Potential Expanders E:** Safe points that might expand safe region
-   ```
-   E = {x ∈ S : might lead to larger S if sampled at LCB(x)}
-   ```
+3. **Potential Expanders $E$:** Safe points that might expand safe region
+   
+   $$E = \{x \in S : \text{might lead to larger } S \text{ if sampled at LCB}(x)\}$$
 
 **Selection rule:**
-```
-x_next = argmax_{x ∈ M ∪ E} [UCB(x) - LCB(x)]
-```
+
+$$x_{\text{next}} = \arg\max_{x \in M \cup E} [\text{UCB}(x) - \text{LCB}(x)]$$
+
 (Select point with highest uncertainty among minimizers and expanders)
 
 **Implementation:**
@@ -389,16 +383,16 @@ def _compute_safe_set(self, X):
 ## Benchmark Functions
 
 **Univariate (1D):**
-- **Forrester:** `f(x) = (6x-2)^2 x sin(12x-4)` - Smooth, single global minimum
-- **Gramacy & Lee:** `f(x) = sin(10πx)/(2x) + (x-1)^4` - Discontinuous
+- **Forrester:** $f(x) = (6x-2)^2 \sin(12x-4)$ - Smooth, single global minimum
+- **Gramacy & Lee:** $f(x) = \frac{\sin(10\pi x)}{2x} + (x-1)^4$ - Discontinuous
 
 **Multivariate (2D+):**
 - **Ackley:** Many local minima, single global minimum at origin
-- **Rosenbrock:** Narrow curved valley, global minimum at (1,1,...,1)
+- **Rosenbrock:** Narrow curved valley, global minimum at $(1,1,\ldots,1)$
 - **Rastrigin:** Highly multimodal with regular grid of local minima
 
 **Safe Optimization:**
-- **Flower:** `f(x₁,x₂) = r^3 x cos(4θ)` - Petal-like safe/unsafe regions
+- **Flower:** $f(x_1,x_2) = r^3 \cos(4\theta)$ where $r = \sqrt{x_1^2 + x_2^2}$ - Petal-like safe/unsafe regions
 
 ---
 
